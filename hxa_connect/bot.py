@@ -213,33 +213,29 @@ class HxaBot:
     def _parse_hermes_reply(output: str) -> str:
         """Extract reply from `hermes chat -Q -q` (quiet programmatic) output.
 
-        -Q output shape:
-            [optional ┌─ Reasoning ─...┐ box]
-            <blank line>
-            session_id: <id>
+        stdout shape:
+            [blank line]
+            [┌─ Reasoning ─...┐ box header — NOTE: no closing border in -Q mode]
+            [reasoning text: starts "The user ...", continuation lines indented]
             <reply text ...>
         """
         lines = output.split("\n")
-        # Primary: reply is everything after the LAST `session_id:` line.
-        for i in range(len(lines) - 1, -1, -1):
-            if lines[i].strip().startswith("session_id:"):
-                return "\n".join(lines[i + 1:]).strip()
-        # Fallback: strip any Reasoning box + session_id line, keep the rest.
-        cleaned: list[str] = []
-        in_box = False
+        result: list[str] = []
+        skipping = False
         for line in lines:
             s = line.strip()
-            if "Reasoning" in s and ("┌" in line or "─" in line):
-                in_box = True
+            # Reasoning box header line → enter skip mode.
+            if "Reasoning" in s and "┌" in line:
+                skipping = True
                 continue
-            if in_box:
-                if "└" in line or "┘" in line:
-                    in_box = False
-                continue
-            if s.startswith("session_id:"):
-                continue
-            cleaned.append(line)
-        return "\n".join(cleaned).strip()
+            if skipping:
+                # Reasoning body: starts with "The user", continuation lines
+                # are indented (leading space). Skip until non-reasoning text.
+                if s.startswith("The user") or (line.startswith(" ") and s):
+                    continue
+                skipping = False
+            result.append(line)
+        return "\n".join(result).strip()
 
     async def start(self):
         """Main entry: register, connect WS, listen for messages."""
