@@ -185,69 +185,61 @@ class HxaBot:
 
     async def ask_hermes(self, question: str) -> str:
         """Send question to Hermes Agent via CLI and parse the reply."""
+        proc = None
         try:
             proc = await asyncio.create_subprocess_exec(
-                "hermes", "chat", "-q", question,
+                "hermes", "chat", "-Q", "-q", question,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env={**os.environ, "NO_COLOR": "1", "TERM": "dumb", "COLUMNS": "200"},
             )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=180)
             output = stdout.decode("utf-8", errors="replace")
             return self._parse_hermes_reply(output)
         except asyncio.TimeoutError:
-            logger.error("Hermes chat -q timed out (120s)")
-            return ""
+            logger.error("Hermes chat -Q timed out (180s)")
         except Exception as e:
-            logger.error(f"Hermes chat -q failed: {e}")
-            return ""
+            logger.error(f"Hermes chat -Q failed: {e}")
+        # Ensure the subprocess is killed on any failure path (avoids zombie/leaked procs).
+        if proc is not None and proc.returncode is None:
+            try:
+                proc.kill()
+                await proc.communicate()
+            except Exception:
+                pass
+        return ""
 
     @staticmethod
     def _parse_hermes_reply(output: str) -> str:
-        """Extract clean reply text from hermes chat -q TUI output."""
+        """Extract reply from `hermes chat -Q -q` (quiet programmatic) output.
+
+        -Q output shape:
+            [optional ┌─ Reasoning ─...┐ box]
+            <blank line>
+            session_id: <id>
+            <reply text ...>
+        """
         lines = output.split("\n")
-        reply_lines: list[str] = []
-
-        # Strategy 1: Find reply block between ⚕ Hermes markers
-        in_reply = False
+        # Primary: reply is everything after the LAST `session_id:` line.
+        for i in range(len(lines) - 1, -1, -1):
+            if lines[i].strip().startswith("session_id:"):
+                return "\n".join(lines[i + 1:]).strip()
+        # Fallback: strip any Reasoning box + session_id line, keep the rest.
+        cleaned: list[str] = []
+        in_box = False
         for line in lines:
-            if "⚕" in line and "Hermes" in line and "───" in line:
-                in_reply = True
+            s = line.strip()
+            if "Reasoning" in s and ("┌" in line or "─" in line):
+                in_box = True
                 continue
-            if in_reply and ("╰─" in line or "Resume this session" in line):
-                break
-            if in_reply:
-                clean = line.replace("│", "").strip()
-                if clean:
-                    reply_lines.append(clean)
-
-        # Strategy 2: Fallback — extract non-TUI lines after "Query:"
-        if not reply_lines:
-            after_query = False
-            box_chars = set("╭╰╮╯│┌└┐┘├┤┬┴┼─═║╔╗╚╝╠╣╦╩╬█▀▄▌▐░▒▓⠀")
-            for line in lines:
-                if "Query:" in line:
-                    after_query = True
-                    continue
-                if not after_query:
-                    continue
-                if "Resume this session" in line:
-                    break
-                if line.startswith(("Session:", "Duration:", "Messages:", "Initializing")):
-                    break
-                clean = line.strip()
-                if not clean or len(clean) < 3:
-                    continue
-                if clean[0] in box_chars:
-                    continue
-                if "───" in clean or "⚕" in clean:
-                    continue
-                # Skip ASCII art banner lines
-                if re.match(r'^[█╗║╔╝╚═\s]+$', clean):
-                    continue
-                reply_lines.append(clean)
-
-        return "\n".join(reply_lines).strip()
+            if in_box:
+                if "└" in line or "┘" in line:
+                    in_box = False
+                continue
+            if s.startswith("session_id:"):
+                continue
+            cleaned.append(line)
+        return "\n".join(cleaned).strip()
 
     async def start(self):
         """Main entry: register, connect WS, listen for messages."""
