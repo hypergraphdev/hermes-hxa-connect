@@ -211,31 +211,25 @@ class HxaBot:
 
     @staticmethod
     def _parse_hermes_reply(output: str) -> str:
-        """Extract reply from `hermes chat -Q -q` (quiet programmatic) output.
+        """Extract the final reply from `hermes chat -Q -q` stdout.
 
-        stdout shape:
-            [blank line]
-            [┌─ Reasoning ─...┐ box header — NOTE: no closing border in -Q mode]
-            [reasoning text: starts "The user ...", continuation lines indented]
-            <reply text ...>
+        With `display.show_reasoning=false` set in Hermes config, the -Q quiet
+        stdout is clean reply text (no reasoning box). Keep this parser robust
+        anyway: if a `┌─ Reasoning ─...┐` header ever appears, drop it and
+        everything before the reply's trailing block. The reply is then the
+        trailing non-empty content of stdout.
         """
-        lines = output.split("\n")
-        result: list[str] = []
-        skipping = False
-        for line in lines:
-            s = line.strip()
-            # Reasoning box header line → enter skip mode.
-            if "Reasoning" in s and "┌" in line:
-                skipping = True
-                continue
-            if skipping:
-                # Reasoning body: starts with "The user", continuation lines
-                # are indented (leading space). Skip until non-reasoning text.
-                if s.startswith("The user") or (line.startswith(" ") and s):
-                    continue
-                skipping = False
-            result.append(line)
-        return "\n".join(result).strip()
+        lines = output.replace("\r\n", "\n").split("\n")
+        # If a reasoning-box header ever leaks through, ignore it and anything
+        # before the final content block.
+        for i, line in enumerate(lines):
+            if "Reasoning" in line and "┌" in line:
+                # After the header, the real reply is the trailing content.
+                return "\n".join(
+                    l for l in lines[i + 1:] if l.strip()
+                ).strip() if any(l.strip() for l in lines[i + 1:]) else ""
+        # Normal case: return all non-empty lines (the reply).
+        return "\n".join(l for l in lines if l.strip()).strip()
 
     async def start(self):
         """Main entry: register, connect WS, listen for messages."""
