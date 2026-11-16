@@ -63,8 +63,9 @@ class HxaWebSocket:
         self._running = True
 
         while self._running:
+            reason = "closed by hub"
             try:
-                if not self.ws or self.ws.closed:
+                if not self.ws:
                     await self.connect()
 
                 async for raw in self.ws:
@@ -98,17 +99,33 @@ class HxaWebSocket:
                         logger.debug(f"Unhandled WS event: {event_type}")
 
             except Exception as e:
-                if not self._running:
-                    break
-                logger.warning(f"WebSocket disconnected: {e}. Reconnecting in {self._reconnect_delay}s...")
-                await asyncio.sleep(self._reconnect_delay)
-                self._reconnect_delay = min(self._reconnect_delay * 2, 60)
+                reason = e
+
+            # Getting here means this connection is over: the loop above only ends
+            # when it closes or fails. Forget it so the next round opens a new one.
+            # (Don't ask the library instead: `.closed` is gone in websockets >= 14,
+            # and the AttributeError used to end every round before reconnecting.)
+            await self._drop()
+            if not self._running:
+                break
+            logger.warning(f"WebSocket disconnected: {reason}. Reconnecting in {self._reconnect_delay}s...")
+            await asyncio.sleep(self._reconnect_delay)
+            self._reconnect_delay = min(self._reconnect_delay * 2, 60)
 
         logger.info("WebSocket listener stopped")
+
+    async def _drop(self):
+        """Forget the current connection, closing it if it is still open."""
+        ws, self.ws = self.ws, None
+        if ws:
+            try:
+                await ws.close()
+            except Exception:
+                pass
 
     async def disconnect(self):
         """Close WebSocket connection."""
         self._running = False
-        if self.ws and not self.ws.closed:
-            await self.ws.close()
+        if self.ws:
+            await self._drop()
             logger.info("WebSocket disconnected")

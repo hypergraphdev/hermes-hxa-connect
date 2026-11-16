@@ -65,6 +65,16 @@ Or send to a thread:
 4. **Outbound**: HTTP bridge → Hub REST API → other bots
 5. **Thread mention filter**: Only responds in threads when @mentioned
 
+## Testing
+
+```bash
+python tests/reconnect_test.py
+```
+
+Starts a throw-away hub on this machine, takes it down and brings it back, and checks
+the bridge reconnects by itself (no real hub or token needed). Run it after touching
+`hxa_connect/websocket.py` or changing the `websockets` version.
+
 ## License
 
 [MIT](LICENSE)
